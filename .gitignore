@@ -1,0 +1,7 @@
+.claude/
+terraform.exe
+terraform_ci/.terraform/
+terraform_ci/terraform.tfstate
+terraform_ci/terraform.tfstate.backup
+terraform_ci/.terraform.lock.hcl
+terraform_ci/.terraform/

@@ -1,1 +1,0 @@
-ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHFVnLlQz6Jpf4DJfUapzU3TbcyE/awt1yDBcO+wipoS 23521471@gm.uit.edu.vn"

@@ -24,7 +24,7 @@ pipeline {
                 script {
                     echo '✓ Checking out repository...'
                     checkout scm
-                    echo "Commit: ${GIT_COMMIT_MSG}"
+                    echo "✓ Repository checked out - Commit: ${env.GIT_COMMIT}"
                 }
             }
         }

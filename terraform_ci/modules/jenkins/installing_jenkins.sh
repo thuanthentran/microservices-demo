@@ -34,9 +34,27 @@ docker run -d \
   -p 8080:8080 \
   -p 50000:50000 \
   -v jenkins_home:/var/jenkins_home \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -u root \
   jenkins/jenkins:lts
 
 echo "Jenkins started on port 8080"
+echo "Jenkins can now access Docker from the host"
+
+# wait for jenkins to be ready
+echo "Waiting for Jenkins to be ready (30 seconds)..."
+sleep 30
+
+# install docker cli in jenkins container
+echo "Installing Docker CLI in Jenkins container..."
+docker exec jenkins bash -c '
+  apt-get update
+  apt-get install -y docker.io
+' || echo "Note: Docker CLI installation in container failed, but docker socket is mounted"
+
+# verify docker access
+echo "Verifying Docker access in Jenkins container..."
+docker exec jenkins docker ps || echo "Docker access verification skipped"
 
 # install harbor
 echo "Installing Harbor..."

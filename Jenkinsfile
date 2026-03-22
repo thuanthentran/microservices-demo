@@ -2,8 +2,8 @@ pipeline {
     agent any
 
     environment {
-        HARBOR_URL = credentials('harbor-url')
-        GIT_COMMIT_MSG = sh(script: "git log -1 --pretty=%B", returnStdout: true).trim()
+        DOCKER_BUILDKIT = '1'
+        BUILDKIT_PROGRESS = 'plain'
     }
 
     parameters {
@@ -33,17 +33,14 @@ pipeline {
             steps {
                 script {
                     echo '✓ Validating service structure...'
-                    sh '''
-                        for service in adservice cartservice checkoutservice currencyservice emailservice \
-                                       frontend paymentservice productcatalogservice recommendationservice \
-                                       shippingservice shoppingassistantservice; do
-                            if [ -f "src/$service/Dockerfile" ]; then
-                                echo "  ✓ Found: src/$service/Dockerfile"
-                            else
-                                echo "  ⚠ Missing: src/$service/Dockerfile"
-                            fi
-                        done
-                    '''
+                    def services = getServiceList()
+                    services.each { service ->
+                        if (fileExists("src/${service}/Dockerfile")) {
+                            echo "  ✓ Found: src/${service}/Dockerfile"
+                        } else {
+                            error "  ✗ Missing: src/${service}/Dockerfile"
+                        }
+                    }
                 }
             }
         }
@@ -95,7 +92,8 @@ pipeline {
                 script {
                     echo '✓ Building Docker images...'
                     def services = getBuildServices()
-                    def buildTag = "${BUILD_NUMBER}-${BUILD_TIMESTAMP}".replace(' ', '-')
+                    def timestamp = sh(script: 'date +%Y%m%d-%H%M%S', returnStdout: true).trim()
+                    def buildTag = "${BUILD_NUMBER}-${timestamp}"
                     
                     services.each { service ->
                         if (fileExists("src/${service}/Dockerfile")) {
@@ -116,29 +114,37 @@ pipeline {
 
         stage('Push Docker Images') {
             when {
-                expression { params.PUSH_IMAGES == true && env.BRANCH_NAME == 'main' }
+                expression { 
+                    params.PUSH_IMAGES == true && (env.BRANCH_NAME == 'main' || env.GIT_BRANCH == 'origin/main')
+                }
             }
             steps {
                 script {
                     echo '✓ Pushing Docker images to Harbor registry...'
+                    def timestamp = sh(script: 'date +%Y%m%d-%H%M%S', returnStdout: true).trim()
+                    def buildTag = "${BUILD_NUMBER}-${timestamp}"
+                    def services = getBuildServices()
+                    
                     withCredentials([usernamePassword(
                         credentialsId: 'harbor-credentials', 
                         usernameVariable: 'HARBOR_USER', 
                         passwordVariable: 'HARBOR_PASS')]) {
                         sh '''
                             echo $HARBOR_PASS | docker login -u $HARBOR_USER --password-stdin ${HARBOR_REGISTRY}
-                            
-                            for service in adservice cartservice checkoutservice currencyservice emailservice \
-                                           frontend paymentservice productcatalogservice recommendationservice \
-                                           shippingservice shoppingassistantservice; do
-                                if docker images | grep -q "${HARBOR_REGISTRY}/${service}"; then
-                                    echo "  → Pushing ${service} to Harbor..."
-                                    docker push ${HARBOR_REGISTRY}/${service}:latest
-                                fi
-                            done
-                            
-                            docker logout
                         '''
+                        
+                        services.each { service ->
+                            sh """
+                                if docker images | grep -q "${HARBOR_REGISTRY}/${service}"; then
+                                    echo "  → Pushing ${service}:${buildTag} and ${service}:latest..."
+                                    docker push ${HARBOR_REGISTRY}/${service}:${buildTag}
+                                    docker push ${HARBOR_REGISTRY}/${service}:latest
+                                    echo "  ✓ ${service} pushed successfully"
+                                fi
+                            """
+                        }
+                        
+                        sh 'docker logout || true'
                     }
                 }
             }
@@ -146,7 +152,7 @@ pipeline {
 
         stage('Security Scan') {
             when {
-                branch 'main'
+                expression { env.BRANCH_NAME == 'main' || env.GIT_BRANCH == 'origin/main' }
             }
             steps {
                 script {
@@ -160,7 +166,7 @@ pipeline {
 
         stage('Deploy') {
             when {
-                branch 'main'
+                expression { env.BRANCH_NAME == 'main' || env.GIT_BRANCH == 'origin/main' }
             }
             steps {
                 script {
@@ -183,7 +189,6 @@ pipeline {
         always {
             echo '✓ Pipeline execution completed'
             sh 'docker logout || true'
-            cleanWs()
         }
         failure {
             echo '✗ Pipeline failed!'
@@ -197,11 +202,15 @@ pipeline {
 
 // ==================== Helper Functions ====================
 
+def getServiceList() {
+    return ['adservice', 'cartservice', 'checkoutservice', 'currencyservice',
+            'emailservice', 'frontend', 'paymentservice', 'productcatalogservice',
+            'recommendationservice', 'shippingservice', 'shoppingassistantservice']
+}
+
 def getBuildServices() {
     if (params.BUILD_TARGET == 'all') {
-        return ['adservice', 'cartservice', 'checkoutservice', 'currencyservice',
-                'emailservice', 'frontend', 'paymentservice', 'productcatalogservice',
-                'recommendationservice', 'shippingservice', 'shoppingassistantservice']
+        return getServiceList()
     } else {
         return [params.BUILD_TARGET]
     }

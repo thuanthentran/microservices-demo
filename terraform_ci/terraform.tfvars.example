@@ -1,0 +1,21 @@
+# ============ SSH Configuration ============
+ssh_public_key = "your-ssh-public-key-here"
+
+# ============ Harbor Configuration ============
+# Hostname/Domain where Harbor will be accessible
+harbor_hostname = "harbor.example.com"
+
+# Change this to a strong password!
+# Recommendation: Use a password manager or generate with: openssl rand -base64 32
+harbor_admin_password = "ChangeMe!StrongPassword123"
+
+harbor_admin_email = "admin@example.com"
+
+harbor_https_port = 443
+harbor_http_port  = 80
+
+# SSL Certificate Configuration
+harbor_ssl_cert_country      = "VN"
+harbor_ssl_cert_state        = "HaNoi"
+harbor_ssl_cert_city         = "Hanoi"
+harbor_ssl_cert_organization = "Your Organization"

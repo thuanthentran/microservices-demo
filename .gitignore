@@ -1,7 +1,97 @@
-.claude/
+# ============ IDE & Editor ============
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ============ Terraform ============
 terraform.exe
 terraform_ci/.terraform/
 terraform_ci/terraform.tfstate
 terraform_ci/terraform.tfstate.backup
 terraform_ci/.terraform.lock.hcl
-terraform_ci/.terraform/
+terraform_ci/terraform.tfvars
+terraform_ci/*.tfvars
+terraform_ci/*.tfvars.json
+.terraform/
+*.tfstate
+*.tfstate.*
+
+# ============ Secrets & Credentials ============
+.env
+.env.local
+.env.*.local
+.claude/
+*.key
+*.pem
+*.crt
+*.pfx
+*-secret*
+.ssh/
+jenkins_home/
+harbor_data/
+
+# ============ Build & Dependencies ============
+# Node.js
+node_modules/
+npm-debug.log
+yarn-error.log
+.npm/
+package-lock.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# Go
+*.out
+go.sum
+
+# Java/Gradle
+.gradle/
+build/
+.java/
+
+# .NET/C#
+obj/
+bin/
+*.csproj.user
+*.sln.DotSettings.user
+
+# ============ Logs & Temp ============
+*.log
+logs/
+tmp/
+temp/
+
+# ============ Cloud & Docker ============
+.docker/
+.dockerignore
+*.tar.gz
+harbor-online-installer-*.tgz
+harbor/
+
+# ============ Jenkins ============
+jenkins_home/
+workspace/
+
+# ============ OS Files ============
+.DS_Store
+Thumbs.db
+*.bak
+.*.swp
+
+#markdowns
+*.md

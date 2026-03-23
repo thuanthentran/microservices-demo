@@ -90,7 +90,7 @@ pipeline {
         stage('Push Docker Images') {
             when {
                 expression { 
-                    params.PUSH_IMAGES == true && (env.BRANCH_NAME == 'main' || env.GIT_BRANCH == 'origin/main')
+                    params.PUSH_IMAGES == true
                 }
             }
             steps {

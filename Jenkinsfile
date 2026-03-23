@@ -35,10 +35,11 @@ pipeline {
                     echo '✓ Validating service structure...'
                     def services = getServiceList()
                     services.each { service ->
-                        if (fileExists("src/${service}/Dockerfile")) {
-                            echo "  ✓ Found: src/${service}/Dockerfile"
+                        def dockerfilePath = getDockerfilePath(service)
+                        if (fileExists(dockerfilePath)) {
+                            echo "  ✓ Found: ${dockerfilePath}"
                         } else {
-                            error "  ✗ Missing: src/${service}/Dockerfile"
+                            error "  ✗ Missing: ${dockerfilePath}"
                         }
                     }
                 }
@@ -96,11 +97,14 @@ pipeline {
                     def buildTag = "${BUILD_NUMBER}-${timestamp}"
                     
                     services.each { service ->
-                        if (fileExists("src/${service}/Dockerfile")) {
+                        def dockerfilePath = getDockerfilePath(service)
+                        if (fileExists(dockerfilePath)) {
                             echo "  → Building Docker image: ${service}..."
-                            dir("src/${service}") {
+                            def dockerfileDir = new File(dockerfilePath).getParent()
+                            dir(dockerfileDir) {
                                 sh """
                                     docker build \
+                                        -f ${new File(dockerfilePath).getName()} \
                                         -t ${HARBOR_REGISTRY}/${service}:${buildTag} \
                                         -t ${HARBOR_REGISTRY}/${service}:latest \
                                         .
@@ -216,6 +220,16 @@ def getBuildServices() {
     }
 }
 
+def getDockerfilePath(String service) {
+    // Handle special cases where Dockerfile is not in the root of service directory
+    switch(service) {
+        case 'cartservice':
+            return "src/${service}/src/Dockerfile"
+        default:
+            return "src/${service}/Dockerfile"
+    }
+}
+
 def buildService(String service) {
     echo "  → Building ${service}..."
     
@@ -225,7 +239,9 @@ def buildService(String service) {
             break
         
         case 'cartservice':
-            sh 'dotnet build cartservice.csproj || true'
+            dir('src') {
+                sh 'dotnet build cartservice/cartservice.csproj || true'
+            }
             break
         
         case ['checkoutservice', 'productcatalogservice', 'shippingservice', 'frontend']:

@@ -2,8 +2,9 @@
 ssh_public_key = "your-ssh-public-key-here"
 
 # ============ Harbor Configuration ============
-# Hostname/Domain where Harbor will be accessible
-harbor_hostname = "harbor.example.com"
+# Leave empty to auto-use VM public IP (RECOMMENDED)
+# Or specify custom domain (e.g., harbor.example.com)
+harbor_hostname = ""
 
 # Change this to a strong password!
 # Recommendation: Use a password manager or generate with: openssl rand -base64 32

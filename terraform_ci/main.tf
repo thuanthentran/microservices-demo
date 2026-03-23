@@ -7,7 +7,8 @@ module "jenkins" {
   ssh_public_key = var.ssh_public_key
 
   # Harbor Configuration
-  harbor_hostname             = var.harbor_hostname
+  # If harbor_hostname is empty, use the public IP automatically
+  harbor_hostname             = var.harbor_hostname != "" ? var.harbor_hostname : module.jenkins.public_ip
   harbor_admin_password       = var.harbor_admin_password
   harbor_admin_email          = var.harbor_admin_email
   harbor_https_port           = var.harbor_https_port

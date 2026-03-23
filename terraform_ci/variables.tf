@@ -16,9 +16,9 @@ variable "ssh_public_key" {
 
 # ============ Harbor Configuration ============
 variable "harbor_hostname" {
-  description = "Harbor hostname or IP address"
+  description = "Harbor hostname or IP address (if empty, will use public IP automatically)"
   type        = string
-  default     = "localhost"
+  default     = ""  # Will be auto-filled from VM public IP if left empty
 }
 
 variable "harbor_admin_password" {

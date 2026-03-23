@@ -101,21 +101,38 @@ pipeline {
                     def services = getBuildServices()
                     def harborProject = 'sample-microservice'
                     
+                    // Debug: Check connectivity to Harbor
+                    echo "  → Testing connection to Harbor registry: ${HARBOR_REGISTRY}..."
+                    sh '''
+                        # Try to curl Harbor API to test connectivity
+                        if curl -f -k https://${HARBOR_REGISTRY}/api/v2.0/health >/dev/null 2>&1; then
+                            echo "  ✓ Harbor is reachable"
+                        else
+                            echo "  ⚠ Warning: Harbor may not be reachable at ${HARBOR_REGISTRY}"
+                            echo "  → Checking if ${HARBOR_REGISTRY} is accessible..."
+                            curl -v -k https://${HARBOR_REGISTRY}/api/v2.0/health || true
+                        fi
+                    '''
+                    
                     withCredentials([usernamePassword(
                         credentialsId: 'jenkin-cred', 
                         usernameVariable: 'HARBOR_USER', 
                         passwordVariable: 'HARBOR_PASS')]) {
+                        echo "  → Logging in to Harbor as: ${HARBOR_USER}"
                         sh '''
                             echo $HARBOR_PASS | docker login -u $HARBOR_USER --password-stdin ${HARBOR_REGISTRY}
                         '''
                         
                         services.each { service ->
                             sh """
+                                echo "  → Checking for image: ${HARBOR_REGISTRY}/${harborProject}/${service}"
                                 if docker images | grep -q "${HARBOR_REGISTRY}/${harborProject}/${service}"; then
-                                    echo "  → Pushing ${service}:${buildTag} and ${service}:latest..."
+                                    echo "  → Found image, pushing ${service}:${buildTag} and ${service}:latest..."
                                     docker push ${HARBOR_REGISTRY}/${harborProject}/${service}:${buildTag}
                                     docker push ${HARBOR_REGISTRY}/${harborProject}/${service}:latest
                                     echo "  ✓ ${service} pushed successfully"
+                                else
+                                    echo "  ⚠ Image not found: ${HARBOR_REGISTRY}/${harborProject}/${service}"
                                 fi
                             """
                         }

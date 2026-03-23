@@ -46,47 +46,7 @@ pipeline {
             }
         }
 
-        stage('Build Services') {
-            steps {
-                script {
-                    echo '✓ Building services...'
-                    def services = getBuildServices()
-                    
-                    services.each { service ->
-                        echo "  → Building ${service}..."
-                        dir("src/${service}") {
-                            buildService(service)
-                        }
-                    }
-                }
-            }
-        }
 
-        stage('Test Services') {
-            steps {
-                script {
-                    echo '✓ Running tests...'
-                    
-                    // C# Tests
-                    if (fileExists('src/cartservice/tests/CartServiceTests.cs')) {
-                        dir('src/cartservice/tests') {
-                            sh 'dotnet test || true'
-                        }
-                    }
-                    
-                    // Go Tests
-                    ['productcatalogservice', 'shippingservice', 'frontend'].each { service ->
-                        if (fileExists("src/${service}/${service}_test.go") || fileExists("src/${service}/*_test.go")) {
-                            dir("src/${service}") {
-                                sh "go test -v ./... || echo 'No tests found'"
-                            }
-                        }
-                    }
-                    
-                    echo '  ✓ Test stage completed'
-                }
-            }
-        }
 
         stage('Build Docker Images') {
             steps {
@@ -100,16 +60,23 @@ pipeline {
                         def dockerfilePath = getDockerfilePath(service)
                         if (fileExists(dockerfilePath)) {
                             echo "  → Building Docker image: ${service}..."
-                            def dockerfileDir = new File(dockerfilePath).getParent()
-                            dir(dockerfileDir) {
+                            
+                            // Extract directory and filename
+                            def dockerfileFile = new File(dockerfilePath)
+                            def contextDir = dockerfileFile.getParent()
+                            def dockerfileName = dockerfileFile.getName()
+                            
+                            dir(contextDir) {
                                 sh """
                                     docker build \
-                                        -f ${new File(dockerfilePath).getName()} \
+                                        -f ${dockerfileName} \
                                         -t ${HARBOR_REGISTRY}/${service}:${buildTag} \
                                         -t ${HARBOR_REGISTRY}/${service}:latest \
                                         .
                                 """
                             }
+                        } else {
+                            echo "  ⚠ Warning: Dockerfile not found at ${dockerfilePath}, skipping ${service}"
                         }
                     }
                 }
@@ -227,50 +194,5 @@ def getDockerfilePath(String service) {
             return "src/${service}/src/Dockerfile"
         default:
             return "src/${service}/Dockerfile"
-    }
-}
-
-def buildService(String service) {
-    echo "  → Building ${service}..."
-    
-    switch(service) {
-        case 'adservice':
-            sh 'chmod +x ./gradlew && ./gradlew build || true'
-            break
-        
-        case 'cartservice':
-            dir('src') {
-                sh 'dotnet build cartservice/cartservice.csproj || true'
-            }
-            break
-        
-        case ['checkoutservice', 'productcatalogservice', 'shippingservice', 'frontend']:
-            sh '''
-                if [ -f go.mod ]; then
-                    go mod download
-                    go build -o app . || true
-                fi
-            '''
-            break
-        
-        case ['currencyservice', 'paymentservice']:
-            sh '''
-                if [ -f package.json ]; then
-                    npm install || true
-                    npm run build || true
-                fi
-            '''
-            break
-        
-        case ['emailservice', 'recommendationservice', 'shoppingassistantservice']:
-            sh '''
-                if [ -f requirements.txt ]; then
-                    pip install -r requirements.txt || true
-                fi
-            '''
-            break
-        
-        default:
-            echo "  ⚠ Unknown service: ${service}"
     }
 }

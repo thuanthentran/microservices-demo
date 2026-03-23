@@ -1,5 +1,14 @@
 #!/bin/bash
-set -e
+# Don't use set -e - allow script to continue on errors
+# set -e
+
+# Error handling function
+handle_error() {
+  echo "❌ Error occurred at line $$1"
+  exit 1
+}
+
+trap 'handle_error $$LINENO' ERR
 
 # Harbor Configuration Variables
 HARBOR_HOSTNAME="${harbor_hostname}"
@@ -12,10 +21,6 @@ HARBOR_SSL_STATE="${harbor_ssl_cert_state}"
 HARBOR_SSL_CITY="${harbor_ssl_cert_city}"
 HARBOR_SSL_ORG="${harbor_ssl_cert_organization}"
 
-echo "=========================================="
-echo "Installing Jenkins and Harbor"
-echo "=========================================="
-
 apt update -y
 
 # install docker
@@ -24,8 +29,8 @@ apt install -y docker.io docker-compose
 systemctl start docker
 systemctl enable docker
 
-# allow ubuntu user use docker
-usermod -aG docker ubuntu
+# allow azureuser to use docker without sudo
+usermod -aG docker azureuser 2>/dev/null || echo "Note: Could not add azureuser to docker group"
 
 # run jenkins
 echo "Starting Jenkins..."
@@ -42,23 +47,38 @@ echo "Jenkins started on port 8080"
 echo "Jenkins can now access Docker from the host"
 
 # wait for jenkins to be ready
-echo "Waiting for Jenkins to be ready (30 seconds)..."
-sleep 30
+echo "Waiting for Jenkins to be ready (2 minutes)..."
+sleep 120
 
-# install docker cli in jenkins container
+# wait for jenkins to actually be ready
+echo "Waiting for Jenkins daemon to respond..."
+RETRY_COUNT=0
+MAX_RETRIES=30
+while [ $${RETRY_COUNT} -lt $${MAX_RETRIES} ]; do
+  if docker exec jenkins bash -c 'test -f /var/jenkins_home/config.xml' 2>/dev/null; then
+    echo "✓ Jenkins is ready!"
+    break
+  fi
+  RETRY_COUNT=$${RETRY_COUNT + 1}
+  echo "  Waiting... ($${RETRY_COUNT}/$${MAX_RETRIES})"
+  sleep 2
+done
+
+# install docker cli in jenkins container (optional, best effort)
 echo "Installing Docker CLI in Jenkins container..."
-docker exec jenkins bash -c '
-  apt-get update
-  apt-get install -y docker.io
-' || echo "Note: Docker CLI installation in container failed, but docker socket is mounted"
+if docker exec jenkins bash -c 'apt-get update && apt-get install -y docker.io' 2>/dev/null; then
+  echo "✓ Docker CLI installed in Jenkins"
+else
+  echo "⚠ Docker CLI installation skipped (using socket mount)"
+fi
 
-# verify docker access
+# verify docker access (optional)
 echo "Verifying Docker access in Jenkins container..."
-docker exec jenkins docker ps || echo "Docker access verification skipped"
+docker exec jenkins docker ps > /dev/null 2>&1 || echo "⚠ Docker access verification skipped"
 
 # install harbor
 echo "Installing Harbor..."
-apt install unzip curl -y
+sudo apt install unzip curl -y
 
 # download and extract harbor
 cd /tmp
@@ -89,9 +109,9 @@ sed -i "s/^harbor_admin_password: .*/harbor_admin_password: $${HARBOR_PASSWORD}/
 sed -i "s/^email_server\.email_from: .*/email_server.email_from: $${HARBOR_EMAIL}/" harbor.yml
 
 # enable https in harbor.yml
-sed -i 's|^  port: 443|  port: '"$${HARBOR_HTTPS_PORT}"'|' harbor.yml
-sed -i 's|^  ssl_cert: .*|  ssl_cert: /data/cert/server.crt|' harbor.yml
-sed -i 's|^  ssl_cert_key: .*|  ssl_cert_key: /data/cert/server.key|' harbor.yml
+sed -i 's|port: 443|port: '"$${HARBOR_HTTPS_PORT}"'|' harbor.yml
+sed -i 's|certificate: .*|certificate: /data/cert/server.crt|' harbor.yml
+sed -i 's|private_key: .*|private_key: /data/cert/server.key|' harbor.yml
 
 # Update HTTP port
 sed -i 's|^http:|&\n  port: '"$${HARBOR_HTTP_PORT}"'|' harbor.yml

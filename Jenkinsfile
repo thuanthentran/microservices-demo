@@ -61,15 +61,18 @@ pipeline {
                         if (fileExists(dockerfilePath)) {
                             echo "  → Building Docker image: ${service}..."
                             
-                            // Extract directory and filename
-                            def dockerfileFile = new File(dockerfilePath)
-                            def contextDir = dockerfileFile.getParent()
-                            def dockerfileName = dockerfileFile.getName()
+                            // Determine context directory based on service
+                            def contextDir
+                            if (service == 'cartservice') {
+                                contextDir = 'src/cartservice/src'
+                            } else {
+                                contextDir = "src/${service}"
+                            }
                             
                             dir(contextDir) {
                                 sh """
                                     docker build \
-                                        -f ${dockerfileName} \
+                                        -f Dockerfile \
                                         -t ${HARBOR_REGISTRY}/${service}:${buildTag} \
                                         -t ${HARBOR_REGISTRY}/${service}:latest \
                                         .

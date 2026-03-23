@@ -55,6 +55,7 @@ pipeline {
                     def services = getBuildServices()
                     def timestamp = sh(script: 'date +%Y%m%d-%H%M%S', returnStdout: true).trim()
                     def buildTag = "${BUILD_NUMBER}-${timestamp}"
+                    def harborProject = 'sample-microservice'
                     
                     services.each { service ->
                         def dockerfilePath = getDockerfilePath(service)
@@ -73,8 +74,8 @@ pipeline {
                                 sh """
                                     docker build \
                                         -f Dockerfile \
-                                        -t ${HARBOR_REGISTRY}/${service}:${buildTag} \
-                                        -t ${HARBOR_REGISTRY}/${service}:latest \
+                                        -t ${HARBOR_REGISTRY}/${harborProject}/${service}:${buildTag} \
+                                        -t ${HARBOR_REGISTRY}/${harborProject}/${service}:latest \
                                         .
                                 """
                             }
@@ -98,9 +99,10 @@ pipeline {
                     def timestamp = sh(script: 'date +%Y%m%d-%H%M%S', returnStdout: true).trim()
                     def buildTag = "${BUILD_NUMBER}-${timestamp}"
                     def services = getBuildServices()
+                    def harborProject = 'sample-microservice'
                     
                     withCredentials([usernamePassword(
-                        credentialsId: 'harbor-credentials', 
+                        credentialsId: 'jenkin-cred', 
                         usernameVariable: 'HARBOR_USER', 
                         passwordVariable: 'HARBOR_PASS')]) {
                         sh '''
@@ -109,10 +111,10 @@ pipeline {
                         
                         services.each { service ->
                             sh """
-                                if docker images | grep -q "${HARBOR_REGISTRY}/${service}"; then
+                                if docker images | grep -q "${HARBOR_REGISTRY}/${harborProject}/${service}"; then
                                     echo "  → Pushing ${service}:${buildTag} and ${service}:latest..."
-                                    docker push ${HARBOR_REGISTRY}/${service}:${buildTag}
-                                    docker push ${HARBOR_REGISTRY}/${service}:latest
+                                    docker push ${HARBOR_REGISTRY}/${harborProject}/${service}:${buildTag}
+                                    docker push ${HARBOR_REGISTRY}/${harborProject}/${service}:latest
                                     echo "  ✓ ${service} pushed successfully"
                                 fi
                             """

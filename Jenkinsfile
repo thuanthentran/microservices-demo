@@ -1,3 +1,5 @@
+def imageTag = ''
+
 pipeline {
     agent any
 
@@ -5,7 +7,6 @@ pipeline {
         DOCKER_BUILDKIT = '1'
         BUILDKIT_PROGRESS = 'plain'
         HARBOR_PROJECT = 'sample-microservice'
-        IMAGE_TAG = ''
     }
 
     parameters {
@@ -53,11 +54,11 @@ pipeline {
                 script {
                     def timestamp = sh(script: 'date +%Y%m%d-%H%M%S', returnStdout: true).trim()
                     def buildNumber = env.BUILD_NUMBER ?: currentBuild.number.toString()
-                    env.IMAGE_TAG = "${buildNumber}-${timestamp}"
-                    if (!env.IMAGE_TAG?.trim()) {
+                    imageTag = "${buildNumber}-${timestamp}"
+                    if (!imageTag?.trim()) {
                         error '✗ IMAGE_TAG is empty or null. Aborting pipeline.'
                     }
-                    echo "✓ Image tag for this pipeline: ${env.IMAGE_TAG}"
+                    echo "✓ Image tag for this pipeline: ${imageTag}"
                 }
             }
         }
@@ -87,7 +88,7 @@ pipeline {
                                 sh """
                                     docker build \
                                         -f Dockerfile \
-                                        -t ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${service}:${env.IMAGE_TAG} \
+                                        -t ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${service}:${imageTag} \
                                         -t ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${service}:latest \
                                         .
                                 """
@@ -110,7 +111,7 @@ pipeline {
                 script {
                     echo '✓ Pushing Docker images to Harbor registry...'
                     def services = getBuildServices()
-                    echo "  → Using image tag: ${env.IMAGE_TAG}"
+                    echo "  → Using image tag: ${imageTag}"
                     
                     // Debug: Check connectivity to Harbor
                     echo "  → Testing connection to Harbor registry: ${HARBOR_REGISTRY}..."
@@ -136,14 +137,14 @@ pipeline {
                         
                         services.each { service ->
                             sh """
-                                echo "  → Checking for image: ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${service}:${env.IMAGE_TAG}"
-                                if docker image inspect ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${service}:${env.IMAGE_TAG} >/dev/null 2>&1; then
-                                    echo "  → Found image, pushing ${service}:${env.IMAGE_TAG} and ${service}:latest..."
-                                    docker push ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${service}:${env.IMAGE_TAG}
+                                echo "  → Checking for image: ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${service}:${imageTag}"
+                                if docker image inspect ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${service}:${imageTag} >/dev/null 2>&1; then
+                                    echo "  → Found image, pushing ${service}:${imageTag} and ${service}:latest..."
+                                    docker push ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${service}:${imageTag}
                                     docker push ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${service}:latest
                                     echo "  ✓ ${service} pushed successfully"
                                 else
-                                    echo "  ⚠ Image not found: ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${service}:${env.IMAGE_TAG}"
+                                    echo "  ⚠ Image not found: ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${service}:${imageTag}"
                                 fi
                             """
                         }

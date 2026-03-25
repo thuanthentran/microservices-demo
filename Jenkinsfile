@@ -17,7 +17,7 @@ pipeline {
             description: 'Select which service(s) to build'
         )
         booleanParam(name: 'PUSH_IMAGES', defaultValue: true, description: 'Push Docker images to Harbor?')
-        string(name: 'HARBOR_REGISTRY', defaultValue: 'localhost', description: 'Harbor registry URL (e.g., 192.168.1.100)')
+        string(name: 'HARBOR_REGISTRY', defaultValue: '4.193.255.114', description: 'Harbor registry URL (e.g., 192.168.1.100)')
     }
  
     stages {

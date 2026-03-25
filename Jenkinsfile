@@ -4,6 +4,8 @@ pipeline {
     environment {
         DOCKER_BUILDKIT = '1'
         BUILDKIT_PROGRESS = 'plain'
+        HARBOR_PROJECT = 'sample-microservice'
+        IMAGE_TAG = ''
     }
 
     parameters {
@@ -15,7 +17,7 @@ pipeline {
             description: 'Select which service(s) to build'
         )
         booleanParam(name: 'PUSH_IMAGES', defaultValue: true, description: 'Push Docker images to Harbor?')
-        string(name: 'HARBOR_REGISTRY', defaultValue: 'localhost', description: 'Harbor registry URL (e.g., 192.168.1.100)')
+        string(name: 'HARBOR_REGISTRY', defaultValue: '4.193.255.114', description: 'Harbor registry URL (e.g., 192.168.1.100)')
     }
  
     stages {
@@ -46,6 +48,16 @@ pipeline {
             }
         }
 
+        stage('Prepare Image Tag') {
+            steps {
+                script {
+                    def timestamp = sh(script: 'date +%Y%m%d-%H%M%S', returnStdout: true).trim()
+                    env.IMAGE_TAG = "${BUILD_NUMBER}-${timestamp}"
+                    echo "✓ Image tag for this pipeline: ${env.IMAGE_TAG}"
+                }
+            }
+        }
+
 
 
         stage('Build Docker Images') {
@@ -53,9 +65,6 @@ pipeline {
                 script {
                     echo '✓ Building Docker images...'
                     def services = getBuildServices()
-                    def timestamp = sh(script: 'date +%Y%m%d-%H%M%S', returnStdout: true).trim()
-                    def buildTag = "${BUILD_NUMBER}-${timestamp}"
-                    def harborProject = 'sample-microservice'
                     
                     services.each { service ->
                         def dockerfilePath = getDockerfilePath(service)
@@ -74,8 +83,8 @@ pipeline {
                                 sh """
                                     docker build \
                                         -f Dockerfile \
-                                        -t ${HARBOR_REGISTRY}/${harborProject}/${service}:${buildTag} \
-                                        -t ${HARBOR_REGISTRY}/${harborProject}/${service}:latest \
+                                        -t ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${service}:${IMAGE_TAG} \
+                                        -t ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${service}:latest \
                                         .
                                 """
                             }
@@ -96,10 +105,8 @@ pipeline {
             steps {
                 script {
                     echo '✓ Pushing Docker images to Harbor registry...'
-                    def timestamp = sh(script: 'date +%Y%m%d-%H%M%S', returnStdout: true).trim()
-                    def buildTag = "${BUILD_NUMBER}-${timestamp}"
                     def services = getBuildServices()
-                    def harborProject = 'sample-microservice'
+                    echo "  → Using image tag: ${IMAGE_TAG}"
                     
                     // Debug: Check connectivity to Harbor
                     echo "  → Testing connection to Harbor registry: ${HARBOR_REGISTRY}..."
@@ -125,14 +132,14 @@ pipeline {
                         
                         services.each { service ->
                             sh """
-                                echo "  → Checking for image: ${HARBOR_REGISTRY}/${harborProject}/${service}"
-                                if docker images | grep -q "${HARBOR_REGISTRY}/${harborProject}/${service}"; then
-                                    echo "  → Found image, pushing ${service}:${buildTag} and ${service}:latest..."
-                                    docker push ${HARBOR_REGISTRY}/${harborProject}/${service}:${buildTag}
-                                    docker push ${HARBOR_REGISTRY}/${harborProject}/${service}:latest
+                                echo "  → Checking for image: ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${service}:${IMAGE_TAG}"
+                                if docker image inspect ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${service}:${IMAGE_TAG} >/dev/null 2>&1; then
+                                    echo "  → Found image, pushing ${service}:${IMAGE_TAG} and ${service}:latest..."
+                                    docker push ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${service}:${IMAGE_TAG}
+                                    docker push ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${service}:latest
                                     echo "  ✓ ${service} pushed successfully"
                                 else
-                                    echo "  ⚠ Image not found: ${HARBOR_REGISTRY}/${harborProject}/${service}"
+                                    echo "  ⚠ Image not found: ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${service}:${IMAGE_TAG}"
                                 fi
                             """
                         }

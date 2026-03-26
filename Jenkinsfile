@@ -70,7 +70,6 @@ pipeline {
                     
                     // Wait for SonarQube Quality Gate
                     echo "  → Waiting for Quality Gate result..."
-                    def sonarUrl = getSonarQubeUrl(params.SONARQUBE_URL)
                     sh '''
                         SONAR_HOST_URL="''' + sonarUrl + '''"
                         TIMEOUT=300

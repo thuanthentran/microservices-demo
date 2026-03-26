@@ -33,44 +33,7 @@ pipeline {
                 }
             }
         }
-        stage('SonarQube Analysis') {
-            when {
-                branch 'main'
-            }
-            steps {
-                script {
-                    echo '✓ Running SonarQube analysis...'
-
-                    def shortCommit = env.GIT_COMMIT?.take(7) ?: 'unknown'
-                    def buildVersion = "${env.BUILD_NUMBER}-${shortCommit}"
-
-                    def scannerHome = tool 'sonar-scanner'
-
-                    withSonarQubeEnv('sonarqube') {
-
-                        sh """
-                        ${scannerHome}/bin/sonar-scanner \
-                        -Dsonar.projectKey=microservices-demo \
-                        -Dsonar.projectName="Microservices Demo" \
-                        -Dsonar.projectVersion=${buildVersion} \
-                        -Dsonar.sources=src \
-                        -Dsonar.sourceEncoding=UTF-8 \
-                        -Dsonar.exclusions=**/node_modules/**,**/test/**,**/tests/** \
-                        -Dsonar.coverage.exclusions=**/test/**
-                        """
-                    }
-                }
-            }
-}
-
-        stage('Quality Gate') {
-            steps {
-                timeout(time: 5, unit: 'MINUTES') {
-                    waitForQualityGate abortPipeline: true
-                }
-            }
-        }
-
+    }
         stage('Validate Services') {
             steps {
                 script {

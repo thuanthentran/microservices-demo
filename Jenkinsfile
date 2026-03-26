@@ -33,70 +33,40 @@ pipeline {
                 }
             }
         }
-        stage('Sonarqube Analysis') {
+        stage('SonarQube Analysis') {
             when {
-                expression { env.BRANCH_NAME == 'main' || env.GIT_BRANCH == 'origin/main' }
+                branch 'main'
             }
             steps {
                 script {
                     echo '✓ Running SonarQube analysis...'
-                    
-                    def sonarUrl = getSonarQubeUrl(params.SONARQUBE_URL)
-                    echo "  → SonarQube URL: ${sonarUrl}"
-                    
-                    withCredentials([string(credentialsId: 'sonarqube-token', variable: 'SONAR_TOKEN')]) {
-                        sh '''
-                            echo "  → Configuring SonarQube Scanner..."
-                            SONAR_SCANNER_PATH="${JENKINS_HOME}/sonar-scanner/sonar-scanner-5.0.1.3006-linux/bin"
-                            
-                            # Get SonarQube host URL dynamically
-                            SONAR_HOST_URL="''' + sonarUrl + '''"
-                            
-                            echo "  → Starting SonarQube code analysis..."
-                            $SONAR_SCANNER_PATH/sonar-scanner \
-                                -Dsonar.projectKey=microservices-demo \
-                                -Dsonar.projectName="Microservices Demo" \
-                                -Dsonar.projectVersion=${BUILD_NUMBER}-${GIT_COMMIT:0:7} \
-                                -Dsonar.sources=src \
-                                -Dsonar.sourceEncoding=UTF-8 \
-                                -Dsonar.host.url=$SONAR_HOST_URL \
-                                -Dsonar.login=$SONAR_TOKEN \
-                                -Dsonar.exclusions="**/node_modules/**,**/test/**,**/tests/**,**/vendor/**,**/gradle/**" \
-                                -Dsonar.coverage.exclusions="**/test/**,**/tests/**"
-                            
-                            echo "  ✓ SonarQube analysis completed"
-                        '''
+
+                    def shortCommit = env.GIT_COMMIT?.take(7) ?: 'unknown'
+                    def buildVersion = "${env.BUILD_NUMBER}-${shortCommit}"
+
+                    def scannerHome = tool 'sonar-scanner'
+
+                    withSonarQubeEnv('sonarqube') {
+
+                        sh """
+                        ${scannerHome}/bin/sonar-scanner \
+                        -Dsonar.projectKey=microservices-demo \
+                        -Dsonar.projectName="Microservices Demo" \
+                        -Dsonar.projectVersion=${buildVersion} \
+                        -Dsonar.sources=src \
+                        -Dsonar.sourceEncoding=UTF-8 \
+                        -Dsonar.exclusions=**/node_modules/**,**/test/**,**/tests/** \
+                        -Dsonar.coverage.exclusions=**/test/**
+                        """
                     }
-                    
-                    // Wait for SonarQube Quality Gate
-                    echo "  → Waiting for Quality Gate result..."
-                    sh '''
-                        SONAR_HOST_URL="''' + sonarUrl + '''"
-                        TIMEOUT=300
-                        ELAPSED=0
-                        INTERVAL=5
-                        
-                        while [ $ELAPSED -lt $TIMEOUT ]; do
-                            STATUS=$(curl -s -u admin:admin "$SONAR_HOST_URL/api/qualitygates/project_status?projectKey=microservices-demo" | grep -o '"status":"[^"]*"' | cut -d'"' -f4)
-                            
-                            if [ ! -z "$STATUS" ]; then
-                                echo "  ✓ Quality Gate Status: $STATUS"
-                                if [ "$STATUS" = "ERROR" ]; then
-                                    echo "  ✗ Quality Gate FAILED!"
-                                    exit 1
-                                else
-                                    echo "  ✓ Quality Gate PASSED"
-                                    exit 0
-                                fi
-                            fi
-                            
-                            echo "  → Waiting for analysis... ($ELAPSED/$TIMEOUT seconds)"
-                            sleep $INTERVAL
-                            ELAPSED=$((ELAPSED + INTERVAL))
-                        done
-                        
-                        echo "  ⚠ Quality Gate check timed out after ${TIMEOUT}s"
-                    '''
+                }
+            }
+}
+
+        stage('Quality Gate') {
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
                 }
             }
         }

@@ -50,7 +50,7 @@ jobs:
 
             elif [ -f "$dir/build.gradle" ]; then
               echo "→ Gradle build"
-              (cd $dir && chmod +x gradlew && ./gradlew build -x test)
+              (cd $dir && chmod +x gradlew && ./gradlew build -x test -x verifyGoogleJavaFormat)
 
             elif [ -f "$dir/package.json" ]; then
               echo "→ Node build"

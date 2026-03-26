@@ -7,6 +7,7 @@ pipeline {
         DOCKER_BUILDKIT = '1'
         BUILDKIT_PROGRESS = 'plain'
         HARBOR_PROJECT = 'sample-microservice'
+        SONARQUBE_DEFAULT_URL = 'http://sonarqube:9000'
     }
 
     parameters {
@@ -18,7 +19,8 @@ pipeline {
             description: 'Select which service(s) to build'
         )
         booleanParam(name: 'PUSH_IMAGES', defaultValue: true, description: 'Push Docker images to Harbor?')
-        string(name: 'HARBOR_REGISTRY', defaultValue: '4.193.255.114', description: 'Harbor registry URL (e.g., 192.168.1.100)')
+        string(name: 'HARBOR_REGISTRY', defaultValue: 'localhost', description: 'Harbor registry URL (e.g., 192.168.1.100)')
+        string(name: 'SONARQUBE_URL', defaultValue: 'http://sonarqube:9000', description: 'SonarQube server URL (leave empty to auto-detect)')
     }
  
     stages {
@@ -28,6 +30,74 @@ pipeline {
                     echo '✓ Checking out repository...'
                     checkout scm
                     echo "✓ Repository checked out - Commit: ${env.GIT_COMMIT}"
+                }
+            }
+        }
+        stage('Sonarqube Analysis') {
+            when {
+                expression { env.BRANCH_NAME == 'main' || env.GIT_BRANCH == 'origin/main' }
+            }
+            steps {
+                script {
+                    echo '✓ Running SonarQube analysis...'
+                    
+                    def sonarUrl = getSonarQubeUrl(params.SONARQUBE_URL)
+                    echo "  → SonarQube URL: ${sonarUrl}"
+                    
+                    withCredentials([string(credentialsId: 'sonarqube-token', variable: 'SONAR_TOKEN')]) {
+                        sh '''
+                            echo "  → Configuring SonarQube Scanner..."
+                            SONAR_SCANNER_PATH="${JENKINS_HOME}/sonar-scanner/sonar-scanner-5.0.1.3006-linux/bin"
+                            
+                            # Get SonarQube host URL dynamically
+                            SONAR_HOST_URL="''' + sonarUrl + '''"
+                            
+                            echo "  → Starting SonarQube code analysis..."
+                            $SONAR_SCANNER_PATH/sonar-scanner \
+                                -Dsonar.projectKey=microservices-demo \
+                                -Dsonar.projectName="Microservices Demo" \
+                                -Dsonar.projectVersion=${BUILD_NUMBER}-${GIT_COMMIT:0:7} \
+                                -Dsonar.sources=src \
+                                -Dsonar.sourceEncoding=UTF-8 \
+                                -Dsonar.host.url=$SONAR_HOST_URL \
+                                -Dsonar.login=$SONAR_TOKEN \
+                                -Dsonar.exclusions="**/node_modules/**,**/test/**,**/tests/**,**/vendor/**,**/gradle/**" \
+                                -Dsonar.coverage.exclusions="**/test/**,**/tests/**"
+                            
+                            echo "  ✓ SonarQube analysis completed"
+                        '''
+                    }
+                    
+                    // Wait for SonarQube Quality Gate
+                    echo "  → Waiting for Quality Gate result..."
+                    def sonarUrl = getSonarQubeUrl(params.SONARQUBE_URL)
+                    sh '''
+                        SONAR_HOST_URL="''' + sonarUrl + '''"
+                        TIMEOUT=300
+                        ELAPSED=0
+                        INTERVAL=5
+                        
+                        while [ $ELAPSED -lt $TIMEOUT ]; do
+                            STATUS=$(curl -s -u admin:admin "$SONAR_HOST_URL/api/qualitygates/project_status?projectKey=microservices-demo" | grep -o '"status":"[^"]*"' | cut -d'"' -f4)
+                            
+                            if [ ! -z "$STATUS" ]; then
+                                echo "  ✓ Quality Gate Status: $STATUS"
+                                if [ "$STATUS" = "ERROR" ]; then
+                                    echo "  ✗ Quality Gate FAILED!"
+                                    exit 1
+                                else
+                                    echo "  ✓ Quality Gate PASSED"
+                                    exit 0
+                                fi
+                            fi
+                            
+                            echo "  → Waiting for analysis... ($ELAPSED/$TIMEOUT seconds)"
+                            sleep $INTERVAL
+                            ELAPSED=$((ELAPSED + INTERVAL))
+                        done
+                        
+                        echo "  ⚠ Quality Gate check timed out after ${TIMEOUT}s"
+                    '''
                 }
             }
         }
@@ -229,4 +299,24 @@ def getDockerfilePath(String service) {
         default:
             return "src/${service}/Dockerfile"
     }
+}
+
+def getSonarQubeUrl(String paramUrl) {
+    // Nếu parameter có giá trị, sử dụng nó
+    if (paramUrl?.trim()) {
+        return paramUrl.trim()
+    }
+    
+    // Cố gắng auto-detect hostname
+    try {
+        def hostname = sh(script: 'hostname -f 2>/dev/null || hostname', returnStdout: true).trim()
+        if (hostname) {
+            return "http://${hostname}:9000"
+        }
+    } catch (Exception e) {
+        // Nếu không lấy được hostname, sử dụng default
+    }
+    
+    // Fallback về default URL
+    return env.SONARQUBE_DEFAULT_URL ?: 'http://sonarqube:9000'
 }

@@ -203,7 +203,7 @@ sudo apt install unzip curl -y
 log_success "Harbor dependencies installed"
 
 # download and extract harbor
-cd /tmp
+cd /opt
 log_info "Downloading Harbor v2.8.2..."
 wget https://github.com/goharbor/harbor/releases/download/v2.8.2/harbor-online-installer-v2.8.2.tgz && log_info "Downloaded Harbor" || log_error "Failed to download Harbor"
 log_info "Extracting Harbor..."
@@ -241,7 +241,7 @@ chmod +x install.sh
 sudo ./install.sh --with-trivy && log_success "Harbor installed successfully" || log_error "Harbor installation failed"
 
 # Re-run compose to make sure Harbor services are up even if prior steps were interrupted.
-sudo docker compose -f /tmp/harbor/docker-compose.yml up -d && log_success "Harbor services are running"
+sudo docker compose -f /opt/harbor/docker-compose.yml up -d && log_success "Harbor services are running"
 
 # Update CA certificates in Jenkins container
 log_info "Updating CA certificates in Jenkins container..."
@@ -268,3 +268,18 @@ log_success "Installation completed successfully"
 log_info "Jenkins: http://<your-vm-ip>:8080"
 log_info "Harbor: https://<your-vm-ip>:$HARBOR_HTTPS_PORT"
 log_info "Harbor Admin User: admin"
+
+log_separator
+log_info "Starting SonarQube container..."
+
+if docker ps -a --format '{{.Names}}' | grep -qx 'sonarqube'; then
+  log_info "Existing SonarQube container found. Recreating..."
+  docker rm -f sonarqube >/dev/null 2>&1 || true
+fi
+
+docker run --name sonarqube -dp 9000:9000 sonarqube && \
+  log_success "SonarQube container started on port 9000" || \
+  log_error "Failed to start SonarQube container"
+
+log_info "SonarQube: http://<your-vm-ip>:9000"
+

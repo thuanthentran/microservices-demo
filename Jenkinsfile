@@ -4,49 +4,31 @@ pipeline {
     agent any
 
     environment {
-        DOCKER_BUILDKIT = '1'
-        BUILDKIT_PROGRESS = 'plain'
-        HARBOR_PROJECT = 'sample-microservice'
-        SONARQUBE_DEFAULT_URL = 'http://sonarqube:9000'
+        DOCKER_BUILDKIT     = '1'
+        BUILDKIT_PROGRESS   = 'plain'
+        HARBOR_PROJECT      = 'sample-microservice'
     }
 
     parameters {
         choice(
             name: 'BUILD_TARGET',
-            choices: ['all', 'adservice', 'cartservice', 'checkoutservice', 'currencyservice', 
-                     'emailservice', 'frontend', 'paymentservice', 'productcatalogservice', 
-                     'recommendationservice', 'shippingservice', 'shoppingassistantservice'],
+            choices: ['all', 'adservice', 'cartservice', 'checkoutservice', 'currencyservice',
+                      'emailservice', 'frontend', 'paymentservice', 'productcatalogservice',
+                      'recommendationservice', 'shippingservice', 'shoppingassistantservice'],
             description: 'Select which service(s) to build'
         )
-        booleanParam(name: 'PUSH_IMAGES', defaultValue: true, description: 'Push Docker images to Harbor?')
-        string(name: 'HARBOR_REGISTRY', defaultValue: 'localhost', description: 'Harbor registry URL (e.g., 192.168.1.100)')
-        string(name: 'SONARQUBE_URL', defaultValue: 'http://sonarqube:9000', description: 'SonarQube server URL (leave empty to auto-detect)')
+        booleanParam(name: 'PUSH_IMAGES',        defaultValue: true,                  description: 'Push Docker images to Harbor?')
+        string(name: 'HARBOR_REGISTRY',          defaultValue: 'localhost',            description: 'Harbor registry URL (e.g., 192.168.1.100)')
+        string(name: 'SONARQUBE_URL',            defaultValue: 'http://sonarqube:9000',description: 'SonarQube server URL')
     }
- 
+
     stages {
+
         stage('Checkout') {
             steps {
                 script {
-                    echo '✓ Checking out repository...'
                     checkout scm
-                    echo "✓ Repository checked out - Commit: ${env.GIT_COMMIT}"
-                }
-            }
-        }
-    }
-        stage('Validate Services') {
-            steps {
-                script {
-                    echo '✓ Validating service structure...'
-                    def services = getServiceList()
-                    services.each { service ->
-                        def dockerfilePath = getDockerfilePath(service)
-                        if (fileExists(dockerfilePath)) {
-                            echo "  ✓ Found: ${dockerfilePath}"
-                        } else {
-                            error "  ✗ Missing: ${dockerfilePath}"
-                        }
-                    }
+                    echo "✓ Checked out — commit: ${env.GIT_COMMIT}"
                 }
             }
         }
@@ -54,156 +36,141 @@ pipeline {
         stage('Prepare Image Tag') {
             steps {
                 script {
-                    def timestamp = sh(script: 'date +%Y%m%d-%H%M%S', returnStdout: true).trim()
+                    def ts          = sh(script: 'date +%Y%m%d-%H%M%S', returnStdout: true).trim()
                     def buildNumber = env.BUILD_NUMBER ?: currentBuild.number.toString()
-                    imageTag = "${buildNumber}-${timestamp}"
-                    if (!imageTag?.trim()) {
-                        error '✗ IMAGE_TAG is empty or null. Aborting pipeline.'
-                    }
-                    echo "✓ Image tag for this pipeline: ${imageTag}"
+                    imageTag = "${buildNumber}-${ts}"
+                    echo "✓ Image tag: ${imageTag}"
                 }
             }
         }
 
-
-
-        stage('Build Docker Images') {
+        stage('Validate Services') {
             steps {
                 script {
-                    echo '✓ Building Docker images...'
-                    def services = getBuildServices()
-                    
-                    services.each { service ->
-                        def dockerfilePath = getDockerfilePath(service)
-                        if (fileExists(dockerfilePath)) {
-                            echo "  → Building Docker image: ${service}..."
-                            
-                            // Determine context directory based on service
-                            def contextDir
-                            if (service == 'cartservice') {
-                                contextDir = 'src/cartservice/src'
-                            } else {
-                                contextDir = "src/${service}"
-                            }
-                            
-                            dir(contextDir) {
-                                sh """
-                                    docker build \
-                                        -f Dockerfile \
-                                        -t ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${service}:${imageTag} \
-                                        -t ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${service}:latest \
-                                        .
-                                """
-                            }
-                        } else {
-                            echo "  ⚠ Warning: Dockerfile not found at ${dockerfilePath}, skipping ${service}"
-                        }
+                    echo '✓ Validating service Dockerfiles...'
+                    getBuildServices().each { service ->
+                        // Resolved here — on the checked-out workspace — before parallel nodes spin up
+                        def path = resolveDockerfilePath(service)
+                        echo "  ✓ ${service} → ${path}"
                     }
                 }
+            }
+        }
+
+        stage('Build & Analyze Services') {
+            steps {
+                script {
+                    // Stash the whole source tree so every parallel node can unstash it
+                    stash name: 'source', includes: 'src/**'
+
+                    def parallelStages = [:]
+
+                    getBuildServices().each { service ->
+                        def svc = service   // capture for closure
+
+                        parallelStages[svc] = {
+                            node {
+                                // Each new node starts with an empty workspace — restore the source
+                                unstash 'source'
+
+                                def dockerfilePath = resolveDockerfilePath(svc)
+                                def buildContext   = (svc == 'cartservice') ? 'src/cartservice/src' : "src/${svc}"
+
+                                stage("${svc}: SonarQube Scan") {
+                                    try {
+                                        dir("src/${svc}") {
+                                            def scannerHome = tool 'Sonarqube'
+                                            withSonarQubeEnv() {
+                                                sh """
+                                                    ${scannerHome}/bin/sonar-scanner \
+                                                        -Dsonar.projectKey=${svc} \
+                                                        -Dsonar.sources=.
+                                                """
+                                            }
+                                        }
+                                        echo "  ✓ ${svc} scan completed"
+                                    } catch (e) {
+                                        echo "  ⚠ ${svc} scan failed — ${e.message}"
+                                    }
+                                }
+
+                                stage("${svc}: Build Docker Image") {
+                                    sh """
+                                        docker build \
+                                            -f ${dockerfilePath} \
+                                            -t ${params.HARBOR_REGISTRY}/${HARBOR_PROJECT}/${svc}:${imageTag} \
+                                            -t ${params.HARBOR_REGISTRY}/${HARBOR_PROJECT}/${svc}:latest \
+                                            ${buildContext}
+                                    """
+                                    echo "  ✓ ${svc} image built"
+                                }
+                            }
+                        }
+                    }
+
+                    parallel parallelStages
+                }
+            }
+        }
+
+        stage('Security Scan') {
+            when { branch 'main' }
+            steps {
+                echo '✓ Security scan placeholder'
             }
         }
 
         stage('Push Docker Images') {
             when {
-                expression { 
-                    params.PUSH_IMAGES == true
-                }
+                expression { params.PUSH_IMAGES == true }
             }
             steps {
                 script {
-                    echo '✓ Pushing Docker images to Harbor registry...'
-                    def services = getBuildServices()
-                    echo "  → Using image tag: ${imageTag}"
-                    
-                    // Debug: Check connectivity to Harbor
-                    echo "  → Testing connection to Harbor registry: ${HARBOR_REGISTRY}..."
+                    echo "✓ Pushing images (tag: ${imageTag})..."
+
                     sh '''
-                        # Try to curl Harbor API to test connectivity
-                        if curl -f -k https://${HARBOR_REGISTRY}/api/v2.0/health >/dev/null 2>&1; then
-                            echo "  ✓ Harbor is reachable"
-                        else
-                            echo "  ⚠ Warning: Harbor may not be reachable at ${HARBOR_REGISTRY}"
-                            echo "  → Checking if ${HARBOR_REGISTRY} is accessible..."
-                            curl -v -k https://${HARBOR_REGISTRY}/api/v2.0/health || true
-                        fi
+                        curl -sf -k https://${HARBOR_REGISTRY}/api/v2.0/health \
+                            && echo "  ✓ Harbor reachable" \
+                            || echo "  ⚠ Harbor may not be reachable"
                     '''
-                    
+
                     withCredentials([usernamePassword(
-                        credentialsId: 'jenkin-cred', 
-                        usernameVariable: 'HARBOR_USER', 
-                        passwordVariable: 'HARBOR_PASS')]) {
-                        echo "  → Logging in to Harbor as: ${HARBOR_USER}"
-                        sh '''
-                            echo $HARBOR_PASS | docker login -u $HARBOR_USER --password-stdin ${HARBOR_REGISTRY}
-                        '''
-                        
-                        services.each { service ->
+                            credentialsId: 'jenkin-cred',
+                            usernameVariable: 'HARBOR_USER',
+                            passwordVariable: 'HARBOR_PASS')]) {
+
+                        sh 'echo $HARBOR_PASS | docker login -u $HARBOR_USER --password-stdin ${HARBOR_REGISTRY}'
+
+                        getBuildServices().each { svc ->
                             sh """
-                                echo "  → Checking for image: ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${service}:${imageTag}"
-                                if docker image inspect ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${service}:${imageTag} >/dev/null 2>&1; then
-                                    echo "  → Found image, pushing ${service}:${imageTag} and ${service}:latest..."
-                                    docker push ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${service}:${imageTag}
-                                    docker push ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${service}:latest
-                                    echo "  ✓ ${service} pushed successfully"
+                                if docker image inspect ${params.HARBOR_REGISTRY}/${HARBOR_PROJECT}/${svc}:${imageTag} >/dev/null 2>&1; then
+                                    docker push ${params.HARBOR_REGISTRY}/${HARBOR_PROJECT}/${svc}:${imageTag}
+                                    docker push ${params.HARBOR_REGISTRY}/${HARBOR_PROJECT}/${svc}:latest
+                                    echo "  ✓ ${svc} pushed"
                                 else
-                                    echo "  ⚠ Image not found: ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${service}:${imageTag}"
+                                    echo "  ⚠ Image not found for ${svc}, skipping push"
                                 fi
                             """
                         }
-                        
+
                         sh 'docker logout || true'
                     }
                 }
             }
         }
 
-        stage('Security Scan') {
-            when {
-                expression { env.BRANCH_NAME == 'main' || env.GIT_BRANCH == 'origin/main' }
-            }
-            steps {
-                script {
-                    echo '✓ Running security scans...'
-                    // Add your security scanning tools here
-                    // Example: trivy, snyk, or similar
-                    sh 'echo "  → Security scan placeholder"'
-                }
-            }
-        }
-
         stage('Deploy') {
-            when {
-                expression { env.BRANCH_NAME == 'main' || env.GIT_BRANCH == 'origin/main' }
-            }
+            when { branch 'main' }
             steps {
-                script {
-                    echo '✓ Deploying services...'
-                    // Add your deployment logic here
-                    // Examples:
-                    // - docker-compose up
-                    // - kubectl apply -f k8s/
-                    // - Terraform apply
-                    sh '''
-                        echo "  → Deployment placeholder"
-                        echo "  → Configure your deployment process here"
-                    '''
-                }
+                echo '✓ Deployment placeholder — configure your deploy steps here'
             }
         }
     }
 
     post {
-        always {
-            echo '✓ Pipeline execution completed'
-            sh 'docker logout || true'
-        }
-        failure {
-            echo '✗ Pipeline failed!'
-            // Send notifications
-        }
-        success {
-            echo '✓ Pipeline succeeded!'
-        }
+        always  { sh 'docker logout || true' }
+        success { echo '✓ Pipeline succeeded!' }
+        failure { echo '✗ Pipeline failed!'   }
     }
 }
 
@@ -216,39 +183,32 @@ def getServiceList() {
 }
 
 def getBuildServices() {
-    if (params.BUILD_TARGET == 'all') {
-        return getServiceList()
-    } else {
-        return [params.BUILD_TARGET]
-    }
+    return (params.BUILD_TARGET == 'all') ? getServiceList() : [params.BUILD_TARGET]
 }
 
-def getDockerfilePath(String service) {
-    // Handle special cases where Dockerfile is not in the root of service directory
-    switch(service) {
-        case 'cartservice':
-            return "src/${service}/src/Dockerfile"
-        default:
-            return "src/${service}/Dockerfile"
-    }
-}
+def resolveDockerfilePath(String service) {
+    def serviceDir = "src/${service}"
 
-def getSonarQubeUrl(String paramUrl) {
-    // Nếu parameter có giá trị, sử dụng nó
-    if (paramUrl?.trim()) {
-        return paramUrl.trim()
+    // Prefer a Dockerfile at the service root; fall back to any Dockerfile found recursively
+    def path = sh(
+        script: """
+            # 1. Preferred locations checked in priority order
+            for candidate in \
+                "${serviceDir}/Dockerfile" \
+                "${serviceDir}/src/Dockerfile" \
+                "${serviceDir}/docker/Dockerfile" \
+                "${serviceDir}/build/Dockerfile"; do
+                [ -f "\$candidate" ] && echo "\$candidate" && exit 0
+            done
+            # 2. Recursive fallback — take the first result
+            find "${serviceDir}" -name 'Dockerfile' -type f | sort | head -1
+        """,
+        returnStdout: true
+    ).trim()
+
+    if (!path) {
+        error "✗ No Dockerfile found anywhere under ${serviceDir} — aborting."
     }
-    
-    // Cố gắng auto-detect hostname
-    try {
-        def hostname = sh(script: 'hostname -f 2>/dev/null || hostname', returnStdout: true).trim()
-        if (hostname) {
-            return "http://${hostname}:9000"
-        }
-    } catch (Exception e) {
-        // Nếu không lấy được hostname, sử dụng default
-    }
-    
-    // Fallback về default URL
-    return env.SONARQUBE_DEFAULT_URL ?: 'http://sonarqube:9000'
+
+    return path
 }

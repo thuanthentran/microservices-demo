@@ -18,8 +18,10 @@ pipeline {
             description: 'Select which service(s) to build'
         )
         booleanParam(name: 'PUSH_IMAGES',        defaultValue: true,                  description: 'Push Docker images to Harbor?')
+        booleanParam(name: 'CLEANUP_LOCAL',       defaultValue: true,                  description: 'Remove local Docker images after push?')
         string(name: 'HARBOR_REGISTRY',          defaultValue: 'localhost',            description: 'Harbor registry URL (e.g., 192.168.1.100)')
         string(name: 'SONARQUBE_URL',            defaultValue: 'http://sonarqube:9000',description: 'SonarQube server URL')
+        string(name: 'KEEP_TAGS',                defaultValue: '5',                    description: 'Number of recent tags to keep in Harbor per service (0 = skip Harbor cleanup)')
     }
 
     stages {
@@ -36,9 +38,9 @@ pipeline {
         stage('Prepare Image Tag') {
             steps {
                 script {
-                    def ts          = sh(script: 'date +%Y%m%d-%H%M%S', returnStdout: true).trim()
-                    def buildNumber = env.BUILD_NUMBER ?: currentBuild.number.toString()
-                    imageTag = "${buildNumber}-${ts}"
+                    def gitShort    = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+                    def buildNumber = env.BUILD_NUMBER
+                    imageTag = "${buildNumber}-${gitShort}"
                     echo "✓ Image tag: ${imageTag}"
                 }
             }
@@ -49,7 +51,6 @@ pipeline {
                 script {
                     echo '✓ Validating service Dockerfiles...'
                     getBuildServices().each { service ->
-                        // Resolved here — on the checked-out workspace — before parallel nodes spin up
                         def path = resolveDockerfilePath(service)
                         echo "  ✓ ${service} → ${path}"
                     }
@@ -60,17 +61,15 @@ pipeline {
         stage('Build & Analyze Services') {
             steps {
                 script {
-                    // Stash the whole source tree so every parallel node can unstash it
                     stash name: 'source', includes: 'src/**'
 
                     def parallelStages = [:]
 
                     getBuildServices().each { service ->
-                        def svc = service   // capture for closure
+                        def svc = service
 
                         parallelStages[svc] = {
                             node {
-                                // Each new node starts with an empty workspace — restore the source
                                 unstash 'source'
 
                                 def dockerfilePath = resolveDockerfilePath(svc)
@@ -159,10 +158,54 @@ pipeline {
             }
         }
 
-        stage('Deploy') {
-            when { branch 'main' }
+        // ── NEW: Cleanup local Docker images ──────────────────────────────────
+        stage('Cleanup Local Images') {
+            when {
+                allOf {
+                    expression { params.PUSH_IMAGES == true }
+                    expression { params.CLEANUP_LOCAL == true }
+                }
+            }
             steps {
-                echo '✓ Deployment placeholder — configure your deploy steps here'
+                script {
+                    echo "✓ Removing local images (tag: ${imageTag})..."
+                    getBuildServices().each { svc ->
+                        sh """
+                            docker rmi ${params.HARBOR_REGISTRY}/${HARBOR_PROJECT}/${svc}:${imageTag} || true
+                            docker rmi ${params.HARBOR_REGISTRY}/${HARBOR_PROJECT}/${svc}:latest       || true
+                        """
+                    }
+                    // Remove dangling layers left over from multi-stage builds
+                    sh 'docker image prune -f'
+                    echo "  ✓ Local cleanup done"
+                }
+            }
+        }
+
+        // ── NEW: Cleanup old tags in Harbor ───────────────────────────────────
+        stage('Cleanup Harbor Old Tags') {
+            when {
+                allOf {
+                    expression { params.PUSH_IMAGES == true }
+                    expression { params.KEEP_TAGS.toInteger() > 0 }
+                }
+            }
+            steps {
+                script {
+                    def keepN = params.KEEP_TAGS.toInteger()
+                    echo "✓ Cleaning up Harbor — keeping ${keepN} most recent tags per service..."
+
+                    withCredentials([usernamePassword(
+                            credentialsId: 'jenkin-cred',
+                            usernameVariable: 'HARBOR_USER',
+                            passwordVariable: 'HARBOR_PASS')]) {
+
+                        getBuildServices().each { svc ->
+                            cleanupHarborOldTags(svc, keepN)
+                        }
+                    }
+                    echo "  ✓ Harbor cleanup done"
+                }
             }
         }
     }
@@ -189,10 +232,8 @@ def getBuildServices() {
 def resolveDockerfilePath(String service) {
     def serviceDir = "src/${service}"
 
-    // Prefer a Dockerfile at the service root; fall back to any Dockerfile found recursively
     def path = sh(
         script: """
-            # 1. Preferred locations checked in priority order
             for candidate in \
                 "${serviceDir}/Dockerfile" \
                 "${serviceDir}/src/Dockerfile" \
@@ -200,7 +241,6 @@ def resolveDockerfilePath(String service) {
                 "${serviceDir}/build/Dockerfile"; do
                 [ -f "\$candidate" ] && echo "\$candidate" && exit 0
             done
-            # 2. Recursive fallback — take the first result
             find "${serviceDir}" -name 'Dockerfile' -type f | sort | head -1
         """,
         returnStdout: true
@@ -211,4 +251,67 @@ def resolveDockerfilePath(String service) {
     }
 
     return path
+}
+
+// ── NEW helper: delete tags older than the N most recent in Harbor ────────────
+//
+// Logic:
+//   1. Fetch all tags for the repository via Harbor API v2
+//   2. Sort by push_time descending (newest first)
+//   3. Skip the first keepN tags + always skip "latest"
+//   4. DELETE the rest via the artifact digest — safer than tag name deletion
+//      because one digest can carry multiple tags; deleting by digest removes all
+//      of them at once without accidentally leaving orphaned layers.
+//
+def cleanupHarborOldTags(String service, int keepN) {
+    // HARBOR_USER / HARBOR_PASS injected by the caller's withCredentials block
+    sh """
+        set -euo pipefail
+
+        REGISTRY="${params.HARBOR_REGISTRY}"
+        PROJECT="${HARBOR_PROJECT}"
+        SVC="${service}"
+        KEEP=${keepN}
+
+        API="https://\${REGISTRY}/api/v2.0/projects/\${PROJECT}/repositories/\${SVC}/artifacts"
+
+        # Fetch artifacts sorted by push_time desc, page size 100 (adjust if you have more)
+        ARTIFACTS=\$(curl -sf -k -u "\${HARBOR_USER}:\${HARBOR_PASS}" \
+            "\${API}?page_size=100&page=1&with_tag=true&sort=-push_time")
+
+        # Extract digests to delete: skip the first KEEP entries, skip anything tagged "latest"
+        DIGESTS_TO_DELETE=\$(echo "\${ARTIFACTS}" | \
+            python3 -c "
+import sys, json
+
+data   = json.load(sys.stdin)
+kept   = 0
+result = []
+
+for artifact in data:
+    tags = [t['name'] for t in (artifact.get('tags') or [])]
+    # Always preserve the 'latest' tag
+    if 'latest' in tags:
+        continue
+    if kept < int('${keepN}'):
+        kept += 1
+        continue
+    result.append(artifact['digest'])
+
+print('\n'.join(result))
+")
+
+        if [ -z "\${DIGESTS_TO_DELETE}" ]; then
+            echo "  ✓ \${SVC}: nothing to delete (≤ \${KEEP} tags)"
+            exit 0
+        fi
+
+        echo "\${DIGESTS_TO_DELETE}" | while IFS= read -r digest; do
+            echo "  Deleting \${SVC}@\${digest}..."
+            curl -sf -k -X DELETE -u "\${HARBOR_USER}:\${HARBOR_PASS}" \
+                "\${API}/\${digest}" \
+                && echo "  ✓ Deleted \${digest}" \
+                || echo "  ⚠ Failed to delete \${digest} — skipping"
+        done
+    """
 }

@@ -25,17 +25,9 @@ jobs:
 
   trigger-jenkins:
     runs-on: ubuntu-latest
-    needs: scan
+    needs: scan          # ← chỉ chạy khi job scan thành công
     steps:
       - name: Trigger Jenkins webhook
         run: |
-          
-          CRUMB=$(curl -s "http://4.193.154.62:8080/crumbIssuer/api/json" \
-            --user "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_TOKEN }}" \
-            | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['crumbRequestField']+':'+d['crumb'])")
-
-          
           curl -f -X POST "${{ secrets.JENKINS_WEBHOOK_URL }}" \
-            -H "$CRUMB" \
-            --user "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_TOKEN }}" \
             --max-time 30

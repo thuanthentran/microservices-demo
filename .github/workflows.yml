@@ -31,4 +31,5 @@ jobs:
       - name: Trigger Jenkins webhook
         run: |
           curl -f -X POST "${{ secrets.JENKINS_WEBHOOK_URL }}" \
+            --data-urlencode "json={}" \
             --max-time 30
